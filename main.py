@@ -1,0 +1,206 @@
+import streamlit as st
+import os
+import time
+from services.auth.login_wall import render_login_page
+from services.state.session_default import initial_session_defaults
+from services.config.workout_config import EXERCISE_OPTIONS
+from services.ui.style_loader import load_css, inject_local_font, inject_webrtc_styles
+from services.persistence.exercise_repository import init_db
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from services.vision.exercise_video_processor import VideoProcessorClass
+from services.tracking.metrics import async_metrics_update
+
+
+def main():
+    st.set_page_config(
+        page_icon=":muscle:",
+        page_title="AI Real-time GYM Trainer",
+        initial_sidebar_state="expanded",
+        layout="centered",
+    )
+
+    load_css(os.path.join(os.getcwd(),"static", "style.css"))
+    inject_local_font(os.path.join(os.getcwd(),"static", "AdobeClean.otf"),"AdobeClean.otf")
+
+    init_db()
+
+    if not render_login_page():
+        return
+
+    initial_session_defaults()
+
+    if st.session_state.get("plan_exercise") not in EXERCISE_OPTIONS:
+        st.session_state.plan_exercise = EXERCISE_OPTIONS[0]
+
+    if st.session_state.get("exercise_type") not in EXERCISE_OPTIONS:
+        st.session_state.exercise_type = st.session_state.plan_exercise
+
+    def sync_selected_exercise():
+        st.session_state.exercise_type = st.session_state.plan_exercise
+
+    workout_started = st.session_state.get("workout_started", False)
+
+    with st.sidebar:
+        st.title("AI Real-time GYM Trainer")
+        st.caption(f"Logged in as: {st.session_state.get('username', 'Guest')}")
+        st.divider()
+        st.subheader("Workout Plan")
+
+
+        if not workout_started:
+            st.selectbox(
+                "Select Exercise",
+                options = EXERCISE_OPTIONS,
+                key="plan_exercise",
+                on_change=sync_selected_exercise,
+            )
+
+            plan_sets = st.number_input(
+                "Number of Sets",
+                min_value=1,
+                max_value=10,
+                value=3,
+                step=1,
+                key="plan_sets",
+            )
+
+            plan_reps = st.number_input(
+                "Reps per Set",
+                min_value=1,
+                max_value=50,
+                value=10,
+                step=1,
+                key="plan_reps",
+            )
+
+            st.markdown(
+                "### Instructions\n"
+                "- Ensure your camera is positioned to capture your full body.\n"
+                "- Maintain proper form to avoid injuries.\n"
+                "- Follow the on-screen cues for a safe and effective workout."
+            )
+            st.markdown("")
+
+            start_session_button = st.button("Start Session", width="stretch", key="start_session_button")
+
+            if start_session_button:
+                st.session_state.exercise_type = st.session_state.plan_exercise
+                st.session_state.target_sets = int(plan_sets)
+                st.session_state.reps_per_set = int(plan_reps)
+                st.session_state.reps = 0
+                st.session_state.workout_started = True
+                st.session_state.set_cycle_started_at = time.time()
+                st.session_state.last_saved_sets_completed = 0
+                st.session_state.last_notified_sets_completed = 0
+                st.session_state.last_notified_workout_complete = False
+                st.rerun()
+        else:
+            exercise = st.session_state.get("exercise_type", "Unknown Exercise")
+            sets = st.session_state.get("target_sets", 0)
+            reps = st.session_state.get("reps_per_set", 0)
+            st.info(f"**{exercise}** -- {sets} sets / {reps} reps")
+            end_session_button = st.button("End Session", width="stretch", key="end_session_button")
+
+            if end_session_button:
+                st.session_state.workout_started = False
+                st.rerun()
+
+        if workout_started:
+            st.divider()
+            exercise = st.session_state.get("exercise_type", "Unknown Exercise")
+            total_reps = st.session_state.get("reps", 0)
+            current_set_reps = st.session_state.get("current_set_reps", 0)
+            reps_per_set = st.session_state.get("reps_per_set", 0)
+            sets_completed = st.session_state.get("sets_completed", 0)
+            target_sets = st.session_state.get("target_sets", 0)
+
+            st.subheader("Progress")
+            st.metric("Total Reps", total_reps)
+            st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
+            st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
+            st.divider()
+            
+
+            if exercise == "Squats":
+                st.subheader("Squat Metrics")
+                st.metric("Knee Angle", f"{st.session_state.knee_angle}°")
+                st.metric("Back Angle", f"{st.session_state.back_angle}°")
+                st.metric("Depth Status", st.session_state.depth_status)
+
+            elif exercise == "Push-ups":
+                st.subheader("Push-up Metrics")
+                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+                st.metric("Body Alignment", st.session_state.body_alignment)
+                st.metric("Hip Position", st.session_state.hip_status)
+
+            elif exercise == "Biceps Curls (Dumbbell)":
+                st.subheader("Curl Metrics")
+                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+                st.metric("Shoulder Stability", st.session_state.shoulder_status)
+                st.metric("Swing Detection", st.session_state.swing_status)
+
+            elif exercise == "Shoulder Press":
+                st.subheader("Shoulder Press Metrics")
+                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
+                st.metric("Arm Extension", st.session_state.extension_status)
+                st.metric("Back Arch", st.session_state.back_arch_status)
+
+            elif exercise == "Lunges":
+                st.subheader("Lunge Metrics")
+                st.metric("Front Knee Angle", f"{st.session_state.front_knee_angle}°")
+                st.metric("Torso Angle", f"{st.session_state.torso_angle}°")
+                st.metric("Balance Status", st.session_state.balance_status)
+
+    st.title("AI Real-time GYM Trainer")
+    st.markdown("#### Real-time pose detection with proactive AI voice coaching")
+    if not workout_started:
+        st.markdown(
+            """
+            <div style="
+                border: 10px dashed #444;
+                border-radius: 0px;
+                padding: 48px 32px;
+                text-align: center;
+                color: #888;
+                margin-top: 32px;
+                margin-bottom: 32px;
+            ">
+                <h2 style="color:#ccc; margin-bottom:8px;">👈 Set your workout plan</h2>
+                <p style="font-size:1.05rem;">
+                    Choose your exercise, sets and reps in the sidebar,<br>
+                    then click <strong>Start Workout</strong> to activate the camera and AI coach.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    else:
+        selected_exercise = st.session_state.get("exercise_type", st.session_state.get("plan_exercise", "Squats"))
+        context = webrtc_streamer(
+            key=f"exercise_analysis_{selected_exercise}",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=lambda: VideoProcessorClass(
+                exercise_type=selected_exercise,
+            ),
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            },
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
+
+        async_metrics_update(context)
+
+        if context.state.playing:
+            time.sleep(0.25)  # Adjust the sleep time as needed for your application
+            st.rerun()
+
+        st.markdown("#### Workout History")
+
+        inject_webrtc_styles()
+
+
+
+if __name__ == "__main__":
+    main()
