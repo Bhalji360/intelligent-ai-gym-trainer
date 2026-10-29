@@ -34,5 +34,19 @@ def async_metrics_update(context):
         if field in latest_metrics:
             st.session_state[field] = latest_metrics[field]
 
-    
+    reps_per_set = st.session_state.get("reps_per_set", 0)
+    target_sets = st.session_state.get("target_sets", 0)
 
+    if reps_per_set > 0 and target_sets > 0:
+        sets_completed = reps // reps_per_set
+        current_set_reps = reps % reps_per_set
+        workout_completed = sets_completed >= target_sets
+        
+    else:
+        sets_completed = 0
+        current_set_reps = 0
+        workout_completed = False
+
+    st.session_state.sets_completed = sets_completed
+    st.session_state.current_set_reps = current_set_reps
+    st.session_state.workout_completed = workout_completed
